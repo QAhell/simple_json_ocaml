@@ -1,0 +1,4 @@
+(library
+ (public_name simple_json)
+ (name simple_json)
+ (libraries simple_parser_combinator))

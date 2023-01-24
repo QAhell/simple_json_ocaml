@@ -1,0 +1,3 @@
+(test
+ (name simple_json)
+ (libraries simple_parser_combinator simple_json))
