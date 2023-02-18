@@ -92,44 +92,15 @@ module Json_parser =
         convert (and_then parse_integer (and_then parse_fraction parse_exponent))
           (fun ((sign, i), (f, e)) -> Number (sign, i, f, e))
 
-      (*let parse_hex_digit =
-        expect "hex_digit" (fun input ->
-          match Input.get input with
-            | Some (digit, input)
-                  when int_of_char '0' <= digit && digit <= int_of_char '9' ->
-                Either.Left (digit - int_of_char '0', input)
-            | Some (digit, input)
-                  when int_of_char 'A' <= digit && digit <= int_of_char 'F' ->
-                Either.Left (digit - int_of_char 'A' + 10, input)
-            | Some (digit, input)
-                  when int_of_char 'a' <= digit && digit <= int_of_char 'f' ->
-                Either.Left (digit - int_of_char 'a' + 10, input)
-            | Some (other, input) ->
-                Either.Right (Make_error.make_error (
-                    "Expected hex digit, found code point " ^ string_of_int other) input)
-            | None ->
-                Either.Right (Make_error.make_error (
-                    "Expected hex digit, found end of input") input)) *)
-
-      (*let escaped_quote = int_of_char '"'
-      let escaped_backslash = int_of_char '\\'
-      let escaped_slash = int_of_char '/'
-      let escaped_beep = int_of_char 'b'
-      let escaped_page_forward = int_of_char 'f'
-      let escaped_newline = int_of_char 'n'
-      let escaped_linefeed = int_of_char 'r'
-      let escaped_tab = int_of_char 't'
-      let escaped_hex = int_of_char 'u'*)
-
-      (*let escaped_quote = 34
-      let escaped_backslash = 92
-      let escaped_slash = 47
-      let escaped_beep = 98
-      let escaped_page_forward = 102
-      let escaped_newline = 110
-      let escaped_linefeed = 114
-      let escaped_tab = 116
-      let escaped_hex = 117*)
+      (*let escaped_quote = int_of_char '"'       (*let escaped_quote = 34
+      let escaped_backslash = int_of_char '\\'    let escaped_backslash = 92
+      let escaped_slash = int_of_char '/'         let escaped_slash = 47
+      let escaped_beep = int_of_char 'b'          let escaped_beep = 98
+      let escaped_page_forward = int_of_char 'f'  let escaped_page_forward = 102
+      let escaped_newline = int_of_char 'n'       let escaped_newline = 110
+      let escaped_linefeed = int_of_char 'r'      let escaped_linefeed = 114
+      let escaped_tab = int_of_char 't'           let escaped_tab = 116
+      let escaped_hex = int_of_char 'u'*)         let escaped_hex = 117*)
 
       let parse_escape = (* without leading backslash *)
         expect "parse_escape" (fun input ->
@@ -159,8 +130,8 @@ module Json_parser =
               (match Input.get input with Some (c3, input) when is_hex_digit c3 -> 
                   let convert d =
                     if int_of_char '0' <= d && d <= int_of_char '9' then d - int_of_char '0' else
-                    if int_of_char 'a' <= d && d <= int_of_char 'f' then d - int_of_char 'a' else
-                    d - int_of_char 'A' in
+                    if int_of_char 'a' <= d && d <= int_of_char 'f' then d - int_of_char 'a' + 10 else
+                    d - int_of_char 'A' + 10 in
                   let u0 = convert c0 in
                   let u1 = convert c1 in
                   let u2 = convert c2 in
@@ -196,19 +167,18 @@ module Json_parser =
       let parse_characters acc =
         repeat_and_fold_left parse_character acc Encoded_string_output.put
 
-      let parse_string =
+      let parse_string_raw =
         let parse_quote = expect_code_point (int_of_char '"') in
         convert (and_then
           parse_quote
           (and_then
             (parse_characters
-                (Encoded_string_output.put
-                  (Encoded_string_output.empty ())
-                  (int_of_char '"')))
+                (Encoded_string_output.empty ()))
             parse_quote))
-          (fun (_, (acc, _)) ->
-            String (Encoded_string_output.to_string
-              (Encoded_string_output.put acc (int_of_char '"'))))
+          (fun (_, (acc, _)) -> Encoded_string_output.to_string acc)
+
+      let parse_string =
+        convert parse_string_raw (fun s -> String s)
 
       let parse_atom =
         optional_spaces_before (
@@ -233,12 +203,24 @@ module Json_parser =
                 (function None -> Array []
                     | Some (x, xs) -> Array (x :: List.rev xs)))
                 (optional_spaces_before (expect_code_point (int_of_char ']')))))) in
-          let parse_object = failwith "TODO" (* TODO *) in
+          let parse_member =
+            and_then (optional_spaces_before parse_string_raw)
+              (second (and_then (optional_spaces_before (expect_code_point (int_of_char ':'))) parse_value)) in
+          let parse_members =
+            convert (and_then parse_member
+            (repeat_and_fold_left (second (and_then
+              (optional_spaces_before (expect_code_point (int_of_char ',')))
+              parse_member)) [] (fun xs x -> x :: xs)))
+            (fun ((k0, v0), kvs) ->
+              Object (List.fold_right (fun (k, v) -> String_map.add k v)
+                kvs (String_map.add k0 v0 String_map.empty))) in
+          let parse_object =
+            second (and_then (optional_spaces_before (expect_code_point (int_of_char '{')))
+              (first (and_then
+                 (convert (optional parse_members) (function Some x -> x | None -> Object String_map.empty))
+                (optional_spaces_before (expect_code_point (int_of_char '}')))))) in
           or_else parse_atom (or_else parse_array parse_object))
-          
 
-
-      (* TODO: parse whitespace, parse arrays and parse objects *)
       let parse_json = parse_value
 
     end
