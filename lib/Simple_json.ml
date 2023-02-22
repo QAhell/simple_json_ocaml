@@ -224,3 +224,105 @@ module Json_parser =
       let parse_json = parse_value
 
     end
+
+module Json_printer =
+  functor (Output : sig include Utf8_stream.Code_point_output val put_str : t -> string -> t end) ->
+    struct
+      exception Invalid_json_number
+      exception Invalid_code_point
+      let print_null o = Output.put_str o "null"
+      let print_boolean o = function
+        | true -> Output.put_str o "true"
+        | false -> Output.put_str o "false"
+      let print_number o (s, i, f, e) =
+        let print_sign o = function
+          | Positive -> o
+          | Negative -> Output.put_str o "-" in
+        let assert_digits s =
+          String.iter (fun c ->
+            if c < '0' || c > '9' then
+              begin
+                raise Invalid_json_number
+              end) s in
+        let print_digits o digits =
+          assert_digits digits ;
+          Output.put_str o digits in
+        let print_nonempty_digits o digits =
+          if i = "" then
+            begin
+              raise Invalid_json_number
+            end ;
+          print_digits o digits in
+        let o = print_sign o s in
+        let o =
+          if i <> "0" && String.starts_with ~prefix:"0" i then
+            begin
+              raise Invalid_json_number
+            end ;
+          print_nonempty_digits o i in
+        let o = if f = "" then o else print_digits (Output.put_str o ".") f in
+        match e with
+          | None -> o
+          | Some (s, e) ->
+            let o = Output.put o (int_of_char 'e') in
+            let o = print_sign o s in
+            let o = print_nonempty_digits o e in
+            o
+
+      let print_code_point_in_string out code_point =
+        if code_point < 0 || code_point > 0x10FFFF then
+          raise Invalid_code_point
+        else if code_point = int_of_char '"' then
+          Output.put_str out "\\\""
+        else if code_point = int_of_char '\\' then
+          Output.put_str out "\\\\"
+        else if code_point < 0x20 then
+          let escaped_char = Printf.sprintf "\\u00%02X" code_point in
+          Output.put_str out escaped_char
+        else
+          Output.put out code_point
+
+      let print_string out text =
+        let out = Output.put out (int_of_char '"') in
+        let input = Utf8_stream.Decoded_string_input.of_string text in
+        let rec walk_input out input =
+          match Utf8_stream.Decoded_string_input.get input with
+            | Some (code_point, input) -> walk_input (print_code_point_in_string out code_point) input
+            | None -> out in
+        let out = walk_input out input in
+        let out = Output.put out (int_of_char '"') in
+        out
+
+      let rec print_array out arr =
+        let out = Output.put out (int_of_char '[') in
+        let rec walk_array is_first out = function
+          | obj :: arr ->
+            let out = if is_first then out else Output.put out (int_of_char ',') in
+            let out = print_json out obj in
+            walk_array false out arr
+          | [] -> out in
+        let out = walk_array true out arr in
+        let out = Output.put out (int_of_char ']') in
+        out
+
+      and print_json out = function
+        | Null -> print_null out
+        | Boolean b -> print_boolean out b
+        | Number n -> print_number out n
+        | String s -> print_string out s
+        | Array a -> print_array out a
+        | Object o -> print_object out o
+
+      and print_object out obj =
+        let out = Output.put out (int_of_char '{') in
+        let walk_obj key value (is_first, out) =
+          (false,
+           let out = if is_first then out else Output.put out (int_of_char ',') in
+           let out = print_string out key in
+           let out = Output.put out (int_of_char ':') in
+           let out = print_json out value in
+           out) in
+        let (_, out) = String_map.fold walk_obj obj (true, out) in
+        let out = Output.put out (int_of_char '}') in
+        out
+    end

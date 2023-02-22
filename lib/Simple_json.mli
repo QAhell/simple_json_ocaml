@@ -41,3 +41,17 @@ module Json_parser :
 
       val parse_string : (Input.t, json_value) Parser.t
     end
+
+module Json_printer :
+  functor (Output : sig include Utf8_stream.Code_point_output val put_str : t -> string -> t end) ->
+    sig
+      exception Invalid_json_number
+      exception Invalid_code_point
+      val print_null : Output.t -> Output.t
+      val print_boolean : Output.t -> bool -> Output.t
+      val print_number : Output.t -> json_number -> Output.t
+      val print_string : Output.t -> string -> Output.t
+      val print_array : Output.t -> json_array -> Output.t
+      val print_object : Output.t -> json_object -> Output.t
+      val print_json : Output.t -> json_value -> Output.t
+    end

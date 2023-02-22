@@ -149,7 +149,76 @@ let test_parse_array () =
   assertTrue (has_error (prs J.parse_json) "[1,true,\"a\",{}")
     "The parse must NOT accept [1,true,\"a\",{}" ;
   () ;;
-  
+
+module O = Utf8_stream.Code_point_output_with_put_str (Utf8_stream.Encoded_string_output) ;;
+module W = Json_printer (O) ;;
+
+let test_print_null () =
+  let out = Utf8_stream.Encoded_string_output.empty () in
+  let text = Utf8_stream.Encoded_string_output.to_string (W.print_null out) in
+  assertTrue (text = "null") "The printer must write a null value as null" ;;
+
+let test_print_boolean () =
+  let out = Utf8_stream.Encoded_string_output.empty () in
+  let true_text = Utf8_stream.Encoded_string_output.to_string (W.print_boolean out true) in
+  let false_text = Utf8_stream.Encoded_string_output.to_string (W.print_boolean out false) in
+  assertTrue (true_text = "true") "The printer must write a true value as true" ;
+  assertTrue (false_text = "false") "The printer must write a false value as false" ;;
+
+let test_print_number () =
+  let out = Utf8_stream.Encoded_string_output.empty () in
+  let text1 = Utf8_stream.Encoded_string_output.to_string (W.print_number out (Positive, "1", "", None)) in
+  let text2 = Utf8_stream.Encoded_string_output.to_string (W.print_number out (Negative, "1", "234", None)) in
+  let text3 = Utf8_stream.Encoded_string_output.to_string (W.print_number out (Positive, "0", "", None)) in
+  let text4 = Utf8_stream.Encoded_string_output.to_string (W.print_number out (Positive, "5", "23", Some (Positive, "42"))) in
+  let text5 = Utf8_stream.Encoded_string_output.to_string (W.print_number out (Positive, "5", "23", Some (Negative, "000"))) in
+  assertTrue (text1 = "1") "The printer must write 1 correctly" ;
+  assertTrue (text2 = "-1.234") "The printer must write -1.234 correctly" ;
+  assertTrue (text3 = "0") "The printer must write 0 correctly" ;
+  assertTrue (text4 = "5.23e42") "The printer must write 5.23e42 correctly" ;
+  assertTrue (text5 = "5.23e-000") "The printer must write 5.23e-000 correctly" ;
+  try
+    (ignore (W.print_number out (Positive, "000", "", None)) ;
+    assertTrue false "The printer must reject leading zeros")
+  with W.Invalid_json_number -> () ;
+  try
+    (ignore (W.print_number out (Positive, "", "42", None)) ;
+    assertTrue false "The printer must reject empty integer part")
+  with W.Invalid_json_number -> () ;
+  try
+    (ignore (W.print_number out (Positive, "a", "42", None)) ;
+    assertTrue false "The printer must reject non-digits in integer part")
+  with W.Invalid_json_number -> () ;
+  () ;;
+
+let test_print_string () =
+  let out = Utf8_stream.Encoded_string_output.empty () in
+  let text1 = Utf8_stream.Encoded_string_output.to_string (W.print_string out "") in
+  let text2 = Utf8_stream.Encoded_string_output.to_string (W.print_string out "\x1A龍\"\\\xF4\x8F\xBF\xBF   ") in
+  assertTrue (text1 = "\"\"") "The printer must write the empty string as \"\"" ;
+  assertTrue (text2 = "\"\\u001A龍\\\"\\\\\xF4\x8F\xBF\xBF   \"") "The printer must properly escape characters" ;
+  () ;;
+
+let test_print_array () =
+  let out = Utf8_stream.Encoded_string_output.empty () in
+  let text1 = Utf8_stream.Encoded_string_output.to_string (W.print_array out []) in
+  let text2 = Utf8_stream.Encoded_string_output.to_string (W.print_array out [Number (Positive, "1", "", None); String "test"; Null]) in
+  assertTrue (text1 = "[]") "The printer must write the empty array as []" ;
+  assertTrue (text2 = "[1,\"test\",null]") "The printer must correctly write [1,\"test\",null]" ;
+  () ;;
+
+let test_print_object () =
+  let out = Utf8_stream.Encoded_string_output.empty () in
+  let obj1 = String_map.empty in
+  let obj2 = String_map.add "a" (Number (Positive, "1", "", None)) obj1 in
+  let obj3 = String_map.add "b" (Object (String_map.add "c" (Boolean false) obj2)) obj1 in
+  let text1 = Utf8_stream.Encoded_string_output.to_string (W.print_object out obj1) in
+  let text2 = Utf8_stream.Encoded_string_output.to_string (W.print_object out obj2) in
+  let text3 = Utf8_stream.Encoded_string_output.to_string (W.print_object out obj3) in
+  assertTrue (text1 = "{}") "The printer must write the empty object as {}" ;
+  assertTrue (text2 = "{\"a\":1}") "The printer must write {\"a\":1} correclty" ;
+  assertTrue (text3 = "{\"b\":{\"a\":1,\"c\":false}}") "The printer must write {\"b\":{\"a\":1,\"c\":false}} correctly" ;
+  () ;;
 
 test_parse_null () ;;
 test_parse_boolean () ;;
@@ -157,3 +226,10 @@ test_parse_number () ;;
 test_parse_string () ;;
 test_parse_object () ;;
 test_parse_array () ;;
+
+test_print_null () ;;
+test_print_boolean () ;
+test_print_number () ;;
+test_print_string () ;;
+test_print_array () ;;
+test_print_object () ;;
