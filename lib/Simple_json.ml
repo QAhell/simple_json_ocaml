@@ -15,7 +15,60 @@ and json_array = json_value list
 and json_number = json_sign * string * string * (json_sign * string) option
 and json_sign = Positive | Negative
 
+module type Json_constructors =
+sig
+  type digits
+  type text
+  type value
+  type arr
+  type obj
+  val of_null : value
+  val of_bool : bool -> value
+  val of_number : json_sign -> digits -> digits -> (json_sign * digits) option -> value
+  val of_text : text -> value
+  val of_array : arr -> value
+  val of_object : obj -> value
+  val empty_digits : digits
+  val put_digit : digits -> char -> digits
+  val empty_text : text
+  val put_code_point : text -> int -> text
+  val empty_array : arr
+  val put_array : arr -> value -> arr
+  val empty_object : obj
+  val put_key_value : obj -> text -> value -> obj
+end
+
+module Default_json_constructors =
+struct
+  type digits = Utf8_stream.Encoded_string_output.t
+  type text = Utf8_stream.Encoded_string_output.t
+  type value = json_value
+  type arr = json_array
+  type obj = json_object
+  let of_null = Null
+  let of_bool b = Boolean b
+  let of_number sign integer fraction exponent =
+    Number (sign, Utf8_stream.Encoded_string_output.to_string integer,
+      Utf8_stream.Encoded_string_output.to_string fraction,
+      match exponent with
+        | None -> None
+        | Some (sign, exponent) -> Some (sign, Utf8_stream.Encoded_string_output.to_string exponent))
+  let of_text text = String (Utf8_stream.Encoded_string_output.to_string text)
+  let of_array arr = Array (List.rev arr)
+  let of_object obj = Object obj
+  let empty_digits = Utf8_stream.Encoded_string_output.empty ()
+  let empty_text = Utf8_stream.Encoded_string_output.empty ()
+  let empty_object = String_map.empty
+  let empty_array = []
+  let put_array xs x = x :: xs
+  let put_digit ds d = Utf8_stream.Encoded_string_output.put ds (int_of_char d)
+  let put_code_point = Utf8_stream.Encoded_string_output.put
+  let put_key_value m key value =
+    String_map.add (Utf8_stream.Encoded_string_output.to_string key) value m
+end
+
 module Json_parser =
+  functor (Json_constructors : Json_constructors) ->
   functor (Parser : Parser_combinator) ->
   functor (Input : Utf8_stream.Code_point_input) ->
   functor (Make_error : sig val make_error : string -> Input.t -> Parser.Error_info.t end) ->
@@ -25,11 +78,11 @@ module Json_parser =
       module C = Code_point_parsers(Input)(Make_error)
       open C
 
-      let parse_null = convert (expect_string "null") (fun _ -> Null)
+      let parse_null = convert (expect_string "null") (fun _ -> Json_constructors.of_null)
 
       let parse_boolean =
         convert (or_else (expect_string "true") (expect_string "false"))
-          (function "true" -> Boolean true | "false" -> Boolean false
+          (function "true" -> Json_constructors.of_bool true | "false" -> Json_constructors.of_bool false
               | _ -> raise (Failure "Parser combinator implementation error! Boolean should either be true or false!"))
 
       let parse_onenine =
@@ -37,7 +90,7 @@ module Json_parser =
             match Input.get input with
               | Some (digit, input)
                     when int_of_char '1' <= digit && digit <= int_of_char '9' ->
-                  Either.Left (digit - int_of_char '0', input)
+                  Either.Left (char_of_int (digit), input)
               | Some (other, input) ->
                   Either.Right (Make_error.make_error (
                       "Expected digit 1-9, found code point " ^ string_of_int other) input)
@@ -50,7 +103,7 @@ module Json_parser =
             match Input.get input with
               | Some (digit, input)
                     when int_of_char '0' <= digit && digit <= int_of_char '9' ->
-                  Either.Left (digit - int_of_char '0', input)
+                  Either.Left (char_of_int (digit), input)
               | Some (other, input) ->
                   Either.Right (Make_error.make_error (
                       "Expected digit, found code point " ^ string_of_int other) input)
@@ -58,25 +111,22 @@ module Json_parser =
                   Either.Right (Make_error.make_error (
                       "Expected digit, found end of input") input))
 
-      open Utf8_stream
-
-      let parse_digits at_least_one =
-        convert
-          ((if at_least_one then once_or_more_and_fold_left else repeat_and_fold_left) parse_digit
-            (Encoded_string_output.empty ())
-            (fun o d -> Encoded_string_output.put o (d + int_of_char '0')))
-          Encoded_string_output.to_string
+      let parse_digits at_least_one acc =
+        let repeat = if at_least_one then once_or_more_and_fold_left else repeat_and_fold_left in
+        repeat parse_digit acc Json_constructors.put_digit
 
       let parse_integer =
         and_then (convert (optional (expect_string "-")) (function Some _ -> Negative | _ -> Positive))
-          (or_else (convert (and_then parse_onenine (parse_digits false))
-                      (fun (d, ds) -> string_of_int d ^ ds))
-                  (convert parse_digit (fun d -> string_of_int d)))
+          (or_else (bind parse_onenine (fun d ->
+                      let acc = Json_constructors.put_digit Json_constructors.empty_digits d in
+                      parse_digits false acc))
+                  (convert parse_digit (Json_constructors.put_digit Json_constructors.empty_digits)))
 
       let parse_fraction =
         convert (optional (
               and_then (expect_string ".")
-                  (parse_digits true))) (function Some (_, s) -> s | None -> "")
+                  (parse_digits true Json_constructors.empty_digits)))
+          (function Some (_, s) -> s | None -> Json_constructors.empty_digits)
 
       let parse_sign =
         convert (optional (or_else (expect_string "+") (expect_string "-")))
@@ -86,11 +136,11 @@ module Json_parser =
       let parse_exponent =
         optional
           (second (and_then (or_else (expect_string "E") (expect_string "e"))
-                   (and_then parse_sign (parse_digits true))))
+                   (and_then parse_sign (parse_digits true Json_constructors.empty_digits))))
 
       let parse_number =
         convert (and_then parse_integer (and_then parse_fraction parse_exponent))
-          (fun ((sign, i), (f, e)) -> Number (sign, i, f, e))
+          (fun ((sign, i), (f, e)) -> Json_constructors.of_number sign i f e)
 
       (*let escaped_quote = int_of_char '"'       (*let escaped_quote = 34
       let escaped_backslash = int_of_char '\\'    let escaped_backslash = 92
@@ -165,20 +215,19 @@ module Json_parser =
           (second (and_then (expect_code_point (int_of_char '\\')) parse_escape))
 
       let parse_characters acc =
-        repeat_and_fold_left parse_character acc Encoded_string_output.put
+        repeat_and_fold_left parse_character acc Json_constructors.put_code_point
 
       let parse_string_raw =
         let parse_quote = expect_code_point (int_of_char '"') in
         convert (and_then
           parse_quote
           (and_then
-            (parse_characters
-                (Encoded_string_output.empty ()))
-            parse_quote))
-          (fun (_, (acc, _)) -> Encoded_string_output.to_string acc)
+            (parse_characters Json_constructors.empty_text)
+            parse_quote)) 
+          (fun (_, (acc, _)) -> acc)
 
       let parse_string =
-        convert parse_string_raw (fun s -> String s)
+        convert parse_string_raw (fun s -> Json_constructors.of_text s)
 
       let parse_atom =
         optional_spaces_before (
@@ -194,36 +243,45 @@ module Json_parser =
              (first (and_then
                 (convert
                  (optional
-                   (and_then parse_value
+                   (bind parse_value (fun x ->
                       (repeat_and_fold_left
                        (second
                         (and_then (optional_spaces_before (expect_code_point (int_of_char ','))) parse_value))
-                       []
-                       (fun xs x -> x :: xs))))
-                (function None -> Array []
-                    | Some (x, xs) -> Array (x :: List.rev xs)))
+                       (Json_constructors.put_array Json_constructors.empty_array x)
+                       (fun xs x -> Json_constructors.put_array xs x)))))
+                (function None -> Json_constructors.of_array Json_constructors.empty_array
+                    | Some xs -> Json_constructors.of_array xs))
                 (optional_spaces_before (expect_code_point (int_of_char ']')))))) in
           let parse_member =
             and_then (optional_spaces_before parse_string_raw)
               (second (and_then (optional_spaces_before (expect_code_point (int_of_char ':'))) parse_value)) in
           let parse_members =
-            convert (and_then parse_member
-            (repeat_and_fold_left (second (and_then
-              (optional_spaces_before (expect_code_point (int_of_char ',')))
-              parse_member)) [] (fun xs x -> x :: xs)))
-            (fun ((k0, v0), kvs) ->
-              Object (List.fold_right (fun (k, v) -> String_map.add k v)
-                kvs (String_map.add k0 v0 String_map.empty))) in
+            convert
+              (bind parse_member (fun (k0, v0) ->
+                (repeat_and_fold_left (second (and_then
+                    (optional_spaces_before (expect_code_point (int_of_char ',')))
+                    parse_member))
+                  (Json_constructors.put_key_value Json_constructors.empty_object k0 v0)
+                  (fun obj (k, v) -> Json_constructors.put_key_value obj k v))))
+              Json_constructors.of_object in
           let parse_object =
             second (and_then (optional_spaces_before (expect_code_point (int_of_char '{')))
               (first (and_then
-                 (convert (optional parse_members) (function Some x -> x | None -> Object String_map.empty))
+                 (convert (optional parse_members)
+                    (function Some x -> x
+                       | None -> Json_constructors.of_object Json_constructors.empty_object))
                 (optional_spaces_before (expect_code_point (int_of_char '}')))))) in
           or_else parse_atom (or_else parse_array parse_object))
 
       let parse_json = parse_value
 
     end
+
+module Default_json_parser =
+  functor (Parser : Parser_combinator) ->
+  functor (Input : Utf8_stream.Code_point_input) ->
+  functor (Make_error : sig val make_error : string -> Input.t -> Parser.Error_info.t end) ->
+    Json_parser(Default_json_constructors)(Parser)(Input)(Make_error)
 
 module Json_printer =
   functor (Output : sig include Utf8_stream.Code_point_output val put_str : t -> string -> t end) ->

@@ -14,7 +14,7 @@ struct
 end
 
 module P = Recursive_descent_parser (Trampoline.Not_a_trampoline) (E)
-module J = Json_parser (P) (Utf8_stream.Decoded_string_input) (E)
+module J = Default_json_parser (P) (Utf8_stream.Decoded_string_input) (E)
 
 let assertTrue condition message =
   assert (condition || (print_endline message ; condition)) ;;
