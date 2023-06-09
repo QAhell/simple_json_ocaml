@@ -17,6 +17,7 @@
 
 (package
  (name simple_json)
+ (version 0.1)
  (synopsis "A simple JSON parser and printer written in OCaml")
  (description "A simple JSON parser and printer written in OCaml")
  (depends ocaml dune simple_parser_combinator)
